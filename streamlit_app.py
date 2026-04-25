@@ -759,7 +759,14 @@ def cached_universe(market: str) -> pd.DataFrame:
 @st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
 def cached_scan(long_prices: pd.DataFrame, benchmark_symbol: str):
     prices = long_to_prices(long_prices)
-    return scan_universe(prices, benchmark_symbol)
+    leaderboard, market_state = scan_universe(prices, benchmark_symbol)
+    return leaderboard, {
+        "status": market_state.status,
+        "color": market_state.color,
+        "distribution_days": int(market_state.distribution_days),
+        "follow_through_day": bool(market_state.follow_through_day),
+        "message": market_state.message,
+    }
 
 
 def render_market_badge(status: str, color: str, message: str) -> None:
@@ -835,7 +842,8 @@ def main() -> None:
         return
 
     long_prices = prices_to_long(result.prices)
-    leaderboard, market_state = cached_scan(long_prices, benchmark)
+    leaderboard, market_state_data = cached_scan(long_prices, benchmark)
+    market_state = MarketState(**market_state_data)
     render_market_badge(market_state.status, market_state.color, market_state.message)
     st.sidebar.metric("Distribution Days", market_state.distribution_days)
     st.sidebar.metric("Follow-through Day", "Yes" if market_state.follow_through_day else "No")
