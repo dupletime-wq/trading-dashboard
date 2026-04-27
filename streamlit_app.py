@@ -4,6 +4,7 @@ from __future__ import annotations
 # pip install streamlit pandas numpy scipy yfinance plotly pyarrow beautifulsoup4
 
 import hashlib
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -21,13 +22,15 @@ from plotly.subplots import make_subplots
 CACHE_DIR = Path.home() / ".trading_dashboard_cache"
 PRICE_CACHE_DIR = CACHE_DIR / "prices"
 SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+QUICK_SCAN_LIMIT = 60
+DOWNLOAD_TIME_BUDGET_SECONDS = 90
 DISCLAIMER = (
     "Research dashboard only. This is not investment advice, an order execution "
     "system, or a real-time trading feed."
 )
 MARKET_CONFIG = {
-    "S&P 500": {"benchmark": "SPY", "currency": "USD", "default_limit": 503},
-    "KOSPI 200": {"benchmark": "069500.KS", "currency": "KRW", "default_limit": 200},
+    "S&P 500": {"benchmark": "SPY", "currency": "USD", "default_limit": QUICK_SCAN_LIMIT},
+    "KOSPI 200": {"benchmark": "069500.KS", "currency": "KRW", "default_limit": QUICK_SCAN_LIMIT},
 }
 KOSPI_SEED = [
     ("090430", "Amorepacific", "Consumer Staples"),
@@ -195,7 +198,6 @@ KOSPI_SEED = [
     ("028050", "Samsung E&A", "Constructions"),
     ("009150", "Samsung Electro-Mechanics", "IT"),
     ("005930", "Samsung Electronics", "IT"),
-    ("0126Z0", "Samsung Epis", "Health Care"),
     ("000810", "Samsung Fire & Marine", "Financials"),
     ("010140", "Samsung Heavy Industries", "Heavy Industries"),
     ("032830", "Samsung Life", "Financials"),
@@ -265,6 +267,7 @@ class PriceDownloadResult:
     cache_path: Path
     stale_cache: bool = False
     warnings: list[str] = field(default_factory=list)
+    invalid_tickers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -345,6 +348,24 @@ def load_kospi_universe() -> list[UniverseMember]:
 
 def members_to_frame(members: list[UniverseMember]) -> pd.DataFrame:
     return pd.DataFrame([member.__dict__ for member in members])
+
+
+def is_valid_ticker(market: str, ticker: str) -> bool:
+    if market == "KOSPI 200":
+        return bool(re.fullmatch(r"\d{6}\.KS", ticker))
+    return bool(re.fullmatch(r"[A-Z0-9][A-Z0-9.-]{0,14}", ticker))
+
+
+def split_valid_tickers(market: str, tickers: list[str]) -> tuple[list[str], list[str]]:
+    valid: list[str] = []
+    invalid: list[str] = []
+    for ticker in dict.fromkeys(tickers):
+        symbol = str(ticker).strip()
+        if is_valid_ticker(market, symbol):
+            valid.append(symbol)
+        else:
+            invalid.append(symbol)
+    return valid, invalid
 
 
 def cache_key(market: str, tickers: list[str], period: str, interval: str) -> str:
@@ -435,35 +456,53 @@ def load_price_data(
     threads: int = 8,
     ttl_seconds: int = 6 * 60 * 60,
     force_refresh: bool = False,
+    max_elapsed_seconds: int = DOWNLOAD_TIME_BUDGET_SECONDS,
     progress_callback: ProgressCallback | None = None,
 ) -> PriceDownloadResult:
     PRICE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    unique_tickers = list(dict.fromkeys(tickers))
+    unique_tickers, invalid_tickers = split_valid_tickers(market, tickers)
     cache_path = PRICE_CACHE_DIR / cache_key(market, unique_tickers, period, interval)
+    warnings: list[str] = []
 
-    if not force_refresh and is_fresh(cache_path, ttl_seconds):
-        prices = read_price_cache(cache_path)
-        if prices:
-            if progress_callback:
-                progress_callback(1, 1, "Loaded prices from local cache.")
-            return PriceDownloadResult(prices=prices, failures=[], from_cache=True, cache_path=cache_path)
+    if invalid_tickers:
+        warnings.append(f"Excluded {len(invalid_tickers)} invalid ticker(s) before download.")
+
+    cached_prices = read_price_cache(cache_path)
+    cache_is_stale = bool(cached_prices) and not is_fresh(cache_path, ttl_seconds)
+    if cached_prices and not force_refresh:
+        failures = sorted({ticker for ticker in unique_tickers if ticker not in cached_prices})
+        if cache_is_stale:
+            warnings.append("Showing local cache first. Use Refresh market data to update from Yahoo.")
+        if failures:
+            warnings.append(f"Local cache is missing {len(failures)} valid ticker(s).")
+        if progress_callback:
+            progress_callback(1, 1, "Loaded prices from local cache.")
+        return PriceDownloadResult(
+            prices=cached_prices,
+            failures=failures,
+            from_cache=True,
+            cache_path=cache_path,
+            stale_cache=cache_is_stale,
+            warnings=warnings,
+            invalid_tickers=invalid_tickers,
+        )
+
+    if not unique_tickers:
+        return PriceDownloadResult(
+            prices={},
+            failures=[],
+            from_cache=False,
+            cache_path=cache_path,
+            warnings=warnings,
+            invalid_tickers=invalid_tickers,
+        )
 
     try:
         import yfinance as yf
     except ImportError as exc:
         raise RuntimeError("Install yfinance first: pip install yfinance") from exc
 
-    def make_unverified_session():
-        try:
-            from curl_cffi import requests
-
-            session = requests.Session(impersonate="chrome")
-            session.verify = False
-            return session
-        except Exception:
-            return None
-
-    def download_symbols(symbols: list[str], active_threads: int, timeout: int, session=None) -> dict[str, pd.DataFrame]:
+    def download_symbols(symbols: list[str], active_threads: int, timeout: int) -> dict[str, pd.DataFrame]:
         raw = yf.download(
             symbols,
             period=period,
@@ -474,57 +513,41 @@ def load_price_data(
             progress=False,
             actions=False,
             timeout=timeout,
-            session=session,
         )
         return split_yfinance_frame(raw, symbols)
 
     prices: dict[str, pd.DataFrame] = {}
-    warnings: list[str] = []
-    fallback_session = None
-    using_unverified_session = False
     chunks = [unique_tickers[i : i + chunk_size] for i in range(0, len(unique_tickers), chunk_size)]
     total = max(len(chunks), 1)
+    start_time = time.perf_counter()
 
     for idx, chunk in enumerate(chunks, start=1):
+        elapsed = time.perf_counter() - start_time
+        if elapsed >= max_elapsed_seconds:
+            warnings.append(f"Stopped Yahoo refresh after {int(elapsed)}s and returned partial data/cache.")
+            break
         if progress_callback:
             progress_callback(idx - 1, total, f"Downloading chunk {idx}/{total}...")
         split: dict[str, pd.DataFrame] = {}
         try:
-            split = download_symbols(chunk, threads, timeout=25, session=fallback_session if using_unverified_session else None)
-        except Exception:
-            pass
-        if not split and not using_unverified_session:
-            fallback_session = make_unverified_session()
-            if fallback_session is not None:
-                try:
-                    split = download_symbols(chunk, threads, timeout=30, session=fallback_session)
-                    if split:
-                        using_unverified_session = True
-                        warnings.append("Yahoo download required an unverified TLS fallback session in this environment.")
-                except Exception:
-                    pass
+            split = download_symbols(chunk, threads, timeout=15)
+        except Exception as exc:
+            warnings.append(f"Yahoo chunk {idx}/{total} failed: {type(exc).__name__}")
         prices.update(split)
 
-        missing = [ticker for ticker in chunk if ticker not in prices]
-        if missing:
-            retry_chunks = [missing[i : i + 10] for i in range(0, len(missing), 10)]
-            for retry_chunk in retry_chunks:
-                try:
-                    prices.update(
-                        download_symbols(
-                            retry_chunk,
-                            min(4, threads),
-                            timeout=30,
-                            session=fallback_session if using_unverified_session else None,
-                        )
-                    )
-                except Exception:
-                    continue
+        missing = [ticker for ticker in chunk if ticker not in split]
+        retry_chunk = missing[:10]
+        if retry_chunk and (time.perf_counter() - start_time) < max_elapsed_seconds:
+            try:
+                prices.update(download_symbols(retry_chunk, min(4, threads), timeout=10))
+            except Exception:
+                pass
+            if len(missing) > len(retry_chunk):
+                warnings.append(f"Skipped retry for {len(missing) - len(retry_chunk)} missing symbol(s) in chunk {idx} to keep loading fast.")
         if progress_callback:
             progress_callback(idx, total, f"Downloaded {idx}/{total} chunks.")
 
     stale_cache_used = False
-    cached_prices = read_price_cache(cache_path)
     if prices and cached_prices:
         missing = [ticker for ticker in unique_tickers if ticker not in prices and ticker in cached_prices]
         if missing:
@@ -537,9 +560,8 @@ def load_price_data(
         warnings.append("Download failed; using stale local cache.")
 
     failures = sorted({ticker for ticker in unique_tickers if ticker not in prices})
-    fresh_prices = {ticker: frame for ticker, frame in prices.items() if not stale_cache_used or ticker not in cached_prices}
-    long_df = prices_to_long(fresh_prices)
-    if not long_df.empty and not stale_cache_used:
+    long_df = prices_to_long(prices)
+    if not long_df.empty:
         long_df.to_parquet(cache_path, index=False)
     return PriceDownloadResult(
         prices=prices,
@@ -548,6 +570,7 @@ def load_price_data(
         cache_path=cache_path,
         stale_cache=stale_cache_used,
         warnings=warnings,
+        invalid_tickers=invalid_tickers,
     )
 
 
@@ -729,6 +752,31 @@ def is_pocket_pivot(df: pd.DataFrame) -> bool:
     return bool(len(series) and series.iloc[-1])
 
 
+def is_pocket_pivot_last(df: pd.DataFrame) -> bool:
+    if len(df) < 55:
+        return False
+    close = df["Close"]
+    volume = df["Volume"]
+    window = df.iloc[-11:-1]
+    down_volume_max = window.loc[window["Close"] < window["Close"].shift(1), "Volume"].max()
+    if pd.isna(down_volume_max):
+        down_volume_max = 0
+
+    sma10_last = close.tail(10).mean()
+    sma50_last = close.tail(50).mean()
+    atr20_last = true_range(df).tail(20).mean()
+    current_low = df["Low"].iloc[-1]
+    if pd.isna(sma10_last) or pd.isna(sma50_last) or pd.isna(atr20_last) or atr20_last <= 0:
+        return False
+
+    near_sma = (
+        abs(current_low - sma10_last) / sma10_last <= 0.025
+        or abs(current_low - sma50_last) / sma50_last <= 0.025
+    )
+    spread_ok = (df["High"].iloc[-1] - df["Low"].iloc[-1]) <= atr20_last * 2.2
+    return bool(close.iloc[-1] > close.iloc[-2] and volume.iloc[-1] > down_volume_max and near_sma and spread_ok)
+
+
 def ants_indicator(df: pd.DataFrame, lookback: int = 15, min_up_days: int = 12) -> bool:
     if len(df) < lookback + 1:
         return False
@@ -906,7 +954,7 @@ def scan_universe(prices: dict[str, pd.DataFrame], benchmark_symbol: str) -> tup
         rs_rating = float(rs_map.get(ticker, 1))
         trend = trend_template(df, rs_rating)
         vcp = detect_vcp(df)
-        pocket = is_pocket_pivot(df)
+        pocket = is_pocket_pivot_last(df)
         ants = ants_indicator(df)
         htf = htf_lite(df)
         reversal = bearish_one_day_reversal(df)
@@ -1187,10 +1235,20 @@ def main() -> None:
         st.error("No universe symbols found.")
         return
 
-    default_limit = min(int(config["default_limit"]), len(universe_df))
-    max_symbols = st.sidebar.number_input("Max symbols to scan", min_value=5, max_value=max(len(universe_df), 5), value=default_limit, step=10)
-    rs_cutoff = st.sidebar.slider("Minimum RS", min_value=1, max_value=99, value=50)
-    tier_filter = st.sidebar.selectbox("Tier filter", ["All", "Watch+", "Setup+", "Breakout only"], index=2)
+    scan_mode = st.sidebar.selectbox("Scan mode", ["Quick scan", "Full universe"], index=0)
+    mode_limit = len(universe_df) if scan_mode == "Full universe" else min(QUICK_SCAN_LIMIT, len(universe_df))
+    default_limit = min(int(config["default_limit"]), mode_limit)
+    scan_limit_key = f"max_symbols_{scan_mode.lower().replace(' ', '_')}"
+    max_symbols = st.sidebar.number_input(
+        "Max symbols to scan",
+        min_value=5,
+        max_value=max(mode_limit, 5),
+        value=default_limit,
+        step=10,
+        key=scan_limit_key,
+    )
+    rs_cutoff = st.sidebar.slider("Minimum RS", min_value=1, max_value=99, value=40)
+    tier_filter = st.sidebar.selectbox("Tier filter", ["All", "Watch+", "Setup+", "Breakout only"], index=1)
     required_patterns = st.sidebar.multiselect(
         "Required pattern",
         ["VCP", "Pocket Pivot", "Ants", "HTF", "Breakout Vol", "Bearish Reversal"],
@@ -1227,6 +1285,8 @@ def main() -> None:
         st.error("No price data was loaded. Try a smaller universe, different period, or refresh later.")
         if result.failures:
             st.warning("Failed symbols: " + ", ".join(result.failures[:30]))
+        if result.invalid_tickers:
+            st.warning("Invalid symbols: " + ", ".join(result.invalid_tickers[:30]))
         return
 
     long_prices = prices_to_long(result.prices)
@@ -1237,6 +1297,7 @@ def main() -> None:
     st.sidebar.metric("Follow-through Day", "Yes" if market_state.follow_through_day else "No")
     st.sidebar.metric("Loaded Symbols", len(result.prices))
     st.sidebar.metric("Failed Symbols", len(result.failures))
+    st.sidebar.metric("Excluded Symbols", len(result.invalid_tickers))
 
     if leaderboard.empty:
         st.warning("Not enough price history to scan this universe.")
@@ -1249,6 +1310,8 @@ def main() -> None:
     st.caption(f"Active filters: RS >= {rs_cutoff} | Tier: {tier_filter} | Required patterns: {', '.join(required_patterns) if required_patterns else 'None'}")
     if result.failures:
         st.warning(f"{len(result.failures)} symbols failed or returned empty data. First failures: {', '.join(result.failures[:15])}")
+    if result.invalid_tickers:
+        st.warning(f"{len(result.invalid_tickers)} invalid ticker(s) were excluded before download: {', '.join(result.invalid_tickers[:15])}")
     for warning in result.warnings:
         st.warning(warning)
     st.caption(f"Local cache: `{result.cache_path}`")
@@ -1300,10 +1363,7 @@ def main() -> None:
     preliminary_event = None
     if not preliminary_df.empty:
         st.subheader("Preliminary Watchlist")
-        st.info(
-            f"현재 필터(RS>={rs_cutoff}, Tier={tier_filter})를 통과한 종목이 부족하거나 제외된 종목 중에서, "
-            "기준에 가장 근접한 상위 후보를 표시합니다."
-        )
+        st.info(f"Closest candidates that did not pass the active filters (RS >= {rs_cutoff}, Tier = {tier_filter}).")
         preliminary_columns = [*columns[:11], "Filter Miss", *columns[11:]]
         preliminary_event = st.dataframe(
             preliminary_df[preliminary_columns],
