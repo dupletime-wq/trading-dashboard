@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 from urllib.request import Request, urlopen
@@ -30,56 +30,206 @@ MARKET_CONFIG = {
     "KOSPI 200": {"benchmark": "069500.KS", "currency": "KRW", "default_limit": 200},
 }
 KOSPI_SEED = [
-    ("005930", "Samsung Electronics"),
-    ("000660", "SK Hynix"),
-    ("373220", "LG Energy Solution"),
-    ("207940", "Samsung Biologics"),
-    ("005380", "Hyundai Motor"),
-    ("000270", "Kia"),
-    ("068270", "Celltrion"),
-    ("105560", "KB Financial"),
-    ("055550", "Shinhan Financial"),
-    ("035420", "NAVER"),
-    ("051910", "LG Chem"),
-    ("006400", "Samsung SDI"),
-    ("005490", "POSCO Holdings"),
-    ("028260", "Samsung C&T"),
-    ("012330", "Hyundai Mobis"),
-    ("096770", "SK Innovation"),
-    ("066570", "LG Electronics"),
-    ("032830", "Samsung Life"),
-    ("003550", "LG Corp"),
-    ("086790", "Hana Financial"),
-    ("033780", "KT&G"),
-    ("017670", "SK Telecom"),
-    ("015760", "KEPCO"),
-    ("009150", "Samsung Electro-Mechanics"),
-    ("034730", "SK Inc"),
-    ("018260", "Samsung SDS"),
-    ("010130", "Korea Zinc"),
-    ("316140", "Woori Financial"),
-    ("011200", "HMM"),
-    ("024110", "IBK"),
-    ("030200", "KT"),
-    ("000810", "Samsung Fire & Marine"),
-    ("003670", "Posco Future M"),
-    ("090430", "Amorepacific"),
-    ("010950", "S-Oil"),
-    ("086280", "Hyundai Glovis"),
-    ("251270", "Netmarble"),
-    ("352820", "HYBE"),
-    ("011170", "Lotte Chemical"),
-    ("034020", "Doosan Enerbility"),
-    ("009540", "HD Korea Shipbuilding"),
-    ("010140", "Samsung Heavy Industries"),
-    ("267250", "HD Hyundai"),
-    ("047050", "Posco International"),
-    ("010620", "Hyundai Mipo Dockyard"),
-    ("042660", "Hanwha Ocean"),
-    ("000720", "Hyundai Engineering & Construction"),
-    ("028050", "Samsung E&A"),
-    ("161390", "Hankook Tire"),
-    ("004020", "Hyundai Steel"),
+    ("090430", "Amorepacific", "Consumer Staples"),
+    ("002790", "Amorepacific Holdings", "Consumer Staples"),
+    ("278470", "APR", "Consumer Staples"),
+    ("002030", "Asia Holdings", "Steels & Materials"),
+    ("282330", "BGF Retail", "Consumer Staples"),
+    ("138930", "BNK Financial", "Financials"),
+    ("068270", "Celltrion", "Health Care"),
+    ("030000", "Cheil Worldwide", "Communication Services"),
+    ("185750", "Chong Kun Dang", "Health Care"),
+    ("001040", "CJ", "Consumer Staples"),
+    ("097950", "CJ CheilJedang", "Consumer Staples"),
+    ("000120", "CJ Logistics", "Industrials"),
+    ("192820", "Cosmax", "Consumer Staples"),
+    ("005420", "Cosmo Chemical", "Energy & Chemicals"),
+    ("021240", "Coway", "Consumer Discretionary"),
+    ("112610", "CS Wind", "Heavy Industries"),
+    ("001680", "Daesang", "Consumer Staples"),
+    ("047040", "Daewoo E&C", "Constructions"),
+    ("003090", "Daewoong", "Health Care"),
+    ("069620", "Daewoong Pharmaceutical", "Health Care"),
+    ("005830", "DB Insurance", "Financials"),
+    ("000210", "DL", "Constructions"),
+    ("375500", "DL E&C", "Constructions"),
+    ("007340", "DN Automotive", "Consumer Discretionary"),
+    ("026960", "Dongsuh", "Consumer Staples"),
+    ("006040", "Dongwon Industries", "Consumer Staples"),
+    ("014820", "Dongwon Systems", "Steels & Materials"),
+    ("000150", "Doosan", "Heavy Industries"),
+    ("241560", "Doosan Bobcat", "Heavy Industries"),
+    ("034020", "Doosan Enerbility", "Heavy Industries"),
+    ("454910", "Doosan Robotics", "Heavy Industries"),
+    ("192080", "DoubleU Games", "Consumer Discretionary"),
+    ("450080", "Ecopro Materials", "Industrials"),
+    ("139480", "Emart", "Consumer Staples"),
+    ("383220", "F&F", "Consumer Discretionary"),
+    ("093370", "Foosung", "Energy & Chemicals"),
+    ("114090", "Grand Korea Leisure", "Consumer Discretionary"),
+    ("006280", "Green Cross", "Health Care"),
+    ("005250", "Green Cross Holdings", "Health Care"),
+    ("078930", "GS", "Energy & Chemicals"),
+    ("006360", "GS E&C", "Constructions"),
+    ("007070", "GS Retail", "Consumer Staples"),
+    ("086790", "Hana Financial", "Financials"),
+    ("009420", "Hanall Biopharma", "Health Care"),
+    ("300720", "Hanil Cement", "Constructions"),
+    ("180640", "Hanjin KAL", "Consumer Discretionary"),
+    ("161390", "Hankook", "Consumer Discretionary"),
+    ("000240", "Hankook & Company", "Consumer Discretionary"),
+    ("128940", "Hanmi Pharm", "Health Care"),
+    ("008930", "Hanmi Science", "Health Care"),
+    ("042700", "Hanmi Semiconductor", "IT"),
+    ("018880", "Hanon Systems", "Consumer Discretionary"),
+    ("014680", "Hansol Chemical", "Energy & Chemicals"),
+    ("009240", "Hanssem", "Consumer Discretionary"),
+    ("000880", "Hanwha", "Energy & Chemicals"),
+    ("012450", "Hanwha Aerospace", "Industrials"),
+    ("082740", "Hanwha Engine", "Heavy Industries"),
+    ("088350", "Hanwha Life", "Financials"),
+    ("042660", "Hanwha Ocean", "Heavy Industries"),
+    ("009830", "Hanwha Solutions", "Energy & Chemicals"),
+    ("272210", "Hanwha Systems", "Industrials"),
+    ("267250", "HD Hyundai", "Energy & Chemicals"),
+    ("267260", "HD Hyundai Electric", "Heavy Industries"),
+    ("329180", "HD Hyundai Heavy Industries", "Heavy Industries"),
+    ("071970", "HD Hyundai Marine Engine", "Heavy Industries"),
+    ("443060", "HD Hyundai Marine Solution", "Heavy Industries"),
+    ("009540", "HD KSOE", "Heavy Industries"),
+    ("017960", "Hankuk Carbon", "Energy & Chemicals"),
+    ("000080", "HiteJinro", "Consumer Staples"),
+    ("204320", "HL Mando", "Consumer Discretionary"),
+    ("011200", "HMM", "Industrials"),
+    ("008770", "Hotel Shilla", "Consumer Discretionary"),
+    ("298050", "HS Hyosung Advanced Materials", "Energy & Chemicals"),
+    ("352820", "Hybe", "Communication Services"),
+    ("298040", "Hyosung Heavy Industries", "Heavy Industries"),
+    ("298020", "Hyosung TNC", "Energy & Chemicals"),
+    ("307950", "Hyundai AutoEver", "IT"),
+    ("069960", "Hyundai Department Store", "Consumer Discretionary"),
+    ("000720", "Hyundai E&C", "Constructions"),
+    ("017800", "Hyundai Elevator", "Heavy Industries"),
+    ("086280", "Hyundai Glovis", "Industrials"),
+    ("001450", "Hyundai Marine & Fire", "Financials"),
+    ("012330", "Hyundai Mobis", "Consumer Discretionary"),
+    ("005380", "Hyundai Motor", "Consumer Discretionary"),
+    ("064350", "Hyundai Rotem", "Heavy Industries"),
+    ("004020", "Hyundai Steel", "Steels & Materials"),
+    ("011210", "Hyundai WIA", "Consumer Discretionary"),
+    ("139130", "IM Financial", "Financials"),
+    ("024110", "Industrial Bank of Korea", "Financials"),
+    ("007660", "Isu Petasys", "IT"),
+    ("457190", "Isu Specialty Chemical", "Energy & Chemicals"),
+    ("175330", "JB Financial", "Financials"),
+    ("035720", "Kakao", "Communication Services"),
+    ("323410", "KakaoBank", "Financials"),
+    ("377300", "KakaoPay", "Financials"),
+    ("035250", "Kangwon Land", "Consumer Discretionary"),
+    ("105560", "KB Financial", "Financials"),
+    ("002380", "KCC", "Constructions"),
+    ("015760", "KEPCO", "Consumer Staples"),
+    ("052690", "KEPCO E&C", "Constructions"),
+    ("051600", "KEPCO KPS", "Industrials"),
+    ("000270", "Kia", "Consumer Discretionary"),
+    ("039490", "Kiwoom Securities", "Financials"),
+    ("161890", "Kolmar Korea", "Consumer Staples"),
+    ("120110", "Kolon Industries", "Energy & Chemicals"),
+    ("047810", "Korea Aerospace", "Industrials"),
+    ("071320", "Korea District Heating", "Consumer Staples"),
+    ("036460", "Korea Gas", "Consumer Staples"),
+    ("071050", "Korea Investment", "Financials"),
+    ("006650", "Korea Petrochemical", "Energy & Chemicals"),
+    ("010130", "Korea Zinc", "Steels & Materials"),
+    ("003490", "Korean Air", "Industrials"),
+    ("259960", "Krafton", "Communication Services"),
+    ("030200", "KT", "Communication Services"),
+    ("033780", "KT&G", "Consumer Staples"),
+    ("011780", "Kumho Petrochemical", "Energy & Chemicals"),
+    ("073240", "Kumho Tire", "Consumer Discretionary"),
+    ("066970", "L&F", "Industrials"),
+    ("003550", "LG", "IT"),
+    ("051910", "LG Chem", "Energy & Chemicals"),
+    ("064400", "LG CNS", "IT"),
+    ("034220", "LG Display", "IT"),
+    ("066570", "LG Electronics", "IT"),
+    ("373220", "LG Energy Solution", "Industrials"),
+    ("051900", "LG H&H", "Consumer Staples"),
+    ("011070", "LG Innotek", "IT"),
+    ("032640", "LG Uplus", "Communication Services"),
+    ("079550", "LIG Nex1", "Industrials"),
+    ("004990", "Lotte", "Consumer Staples"),
+    ("011170", "Lotte Chemical", "Energy & Chemicals"),
+    ("005300", "Lotte Chilsung", "Consumer Staples"),
+    ("004000", "Lotte Fine Chemical", "Energy & Chemicals"),
+    ("023530", "Lotte Shopping", "Consumer Discretionary"),
+    ("280360", "Lotte Wellfood", "Consumer Staples"),
+    ("006260", "LS", "Industrials"),
+    ("010120", "LS Electric", "Industrials"),
+    ("138040", "Meritz Financial", "Financials"),
+    ("006800", "Mirae Asset Securities", "Financials"),
+    ("081660", "Misto", "Consumer Discretionary"),
+    ("002840", "Miwon Commercial", "Energy & Chemicals"),
+    ("268280", "Miwon Specialty Chemical", "Energy & Chemicals"),
+    ("035420", "Naver", "Communication Services"),
+    ("036570", "NCSoft", "Communication Services"),
+    ("251270", "Netmarble", "Communication Services"),
+    ("005940", "NH Investment & Securities", "Financials"),
+    ("004370", "Nongshim", "Consumer Staples"),
+    ("010060", "OCI Holdings", "Energy & Chemicals"),
+    ("271560", "Orion", "Consumer Staples"),
+    ("001800", "Orion Holdings", "Consumer Staples"),
+    ("007310", "Ottogi", "Consumer Staples"),
+    ("028670", "Pan Ocean", "Industrials"),
+    ("034230", "Paradise", "Consumer Discretionary"),
+    ("103140", "Poongsan", "Steels & Materials"),
+    ("005490", "POSCO", "Steels & Materials"),
+    ("022100", "POSCO DX", "IT"),
+    ("003670", "POSCO Future M", "Industrials"),
+    ("047050", "POSCO International", "Industrials"),
+    ("012750", "S-1", "Industrials"),
+    ("062040", "Sanil Electric", "Heavy Industries"),
+    ("207940", "Samsung Biologics", "Health Care"),
+    ("028260", "Samsung C&T", "Constructions"),
+    ("029780", "Samsung Card", "Financials"),
+    ("028050", "Samsung E&A", "Constructions"),
+    ("009150", "Samsung Electro-Mechanics", "IT"),
+    ("005930", "Samsung Electronics", "IT"),
+    ("0126Z0", "Samsung Epis", "Health Care"),
+    ("000810", "Samsung Fire & Marine", "Financials"),
+    ("010140", "Samsung Heavy Industries", "Heavy Industries"),
+    ("032830", "Samsung Life", "Financials"),
+    ("006400", "Samsung SDI", "IT"),
+    ("018260", "Samsung SDS", "IT"),
+    ("016360", "Samsung Securities", "Financials"),
+    ("003230", "Samyang Foods", "Consumer Staples"),
+    ("137310", "SD Biosensor", "Health Care"),
+    ("001430", "Seah Besteel", "Steels & Materials"),
+    ("003030", "Seah Steel Holdings", "Steels & Materials"),
+    ("004490", "Sebang Global Battery", "Consumer Discretionary"),
+    ("055550", "Shinhan Financial", "Financials"),
+    ("004170", "Shinsegae", "Consumer Discretionary"),
+    ("034730", "SK", "Energy & Chemicals"),
+    ("326030", "SK Biopharm", "Health Care"),
+    ("302440", "SK Bioscience", "Health Care"),
+    ("285130", "SK Chemicals", "Energy & Chemicals"),
+    ("000660", "SK Hynix", "IT"),
+    ("361610", "SK IE Technology", "Industrials"),
+    ("096770", "SK Innovation", "Energy & Chemicals"),
+    ("402340", "SK Square", "IT"),
+    ("017670", "SK Telecom", "Communication Services"),
+    ("011790", "SKC", "Energy & Chemicals"),
+    ("005850", "SL", "Consumer Discretionary"),
+    ("010950", "S-Oil", "Energy & Chemicals"),
+    ("003240", "Taekwang Industrial", "Energy & Chemicals"),
+    ("001440", "Taihan Cable & Solution", "Industrials"),
+    ("069260", "TKG Huchems", "Energy & Chemicals"),
+    ("316140", "Woori Financial", "Financials"),
+    ("008730", "Youlchon Chemical", "Steels & Materials"),
+    ("000670", "Young Poong", "Steels & Materials"),
+    ("111770", "Youngone", "Consumer Discretionary"),
+    ("009970", "Youngone Holdings", "Consumer Discretionary"),
+    ("000100", "Yuhan", "Health Care"),
 ]
 SP500_FALLBACK = [
     ("AAPL", "Apple Inc.", "Information Technology"),
@@ -113,6 +263,8 @@ class PriceDownloadResult:
     failures: list[str]
     from_cache: bool
     cache_path: Path
+    stale_cache: bool = False
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -183,7 +335,12 @@ def load_sp500_universe(timeout: int = 15) -> list[UniverseMember]:
 
 
 def load_kospi_universe() -> list[UniverseMember]:
-    return [UniverseMember(symbol=normalize_kr_symbol(symbol), name=name) for symbol, name in KOSPI_SEED]
+    members = []
+    for row in KOSPI_SEED:
+        symbol, name, *rest = row
+        sector = rest[0] if rest else ""
+        members.append(UniverseMember(symbol=normalize_kr_symbol(symbol), name=name, sector=sector))
+    return members
 
 
 def members_to_frame(members: list[UniverseMember]) -> pd.DataFrame:
@@ -199,6 +356,15 @@ def cache_key(market: str, tickers: list[str], period: str, interval: str) -> st
 
 def is_fresh(path: Path, ttl_seconds: int) -> bool:
     return path.exists() and (time.time() - path.stat().st_mtime) < ttl_seconds
+
+
+def read_price_cache(path: Path) -> dict[str, pd.DataFrame]:
+    if not path.exists():
+        return {}
+    try:
+        return long_to_prices(pd.read_parquet(path))
+    except Exception:
+        return {}
 
 
 def normalize_ohlcv_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -265,8 +431,8 @@ def load_price_data(
     tickers: list[str],
     period: str = "2y",
     interval: str = "1d",
-    chunk_size: int = 80,
-    threads: int = 12,
+    chunk_size: int = 60,
+    threads: int = 8,
     ttl_seconds: int = 6 * 60 * 60,
     force_refresh: bool = False,
     progress_callback: ProgressCallback | None = None,
@@ -276,48 +442,113 @@ def load_price_data(
     cache_path = PRICE_CACHE_DIR / cache_key(market, unique_tickers, period, interval)
 
     if not force_refresh and is_fresh(cache_path, ttl_seconds):
-        prices = long_to_prices(pd.read_parquet(cache_path))
-        if progress_callback:
-            progress_callback(1, 1, "Loaded prices from local cache.")
-        return PriceDownloadResult(prices=prices, failures=[], from_cache=True, cache_path=cache_path)
+        prices = read_price_cache(cache_path)
+        if prices:
+            if progress_callback:
+                progress_callback(1, 1, "Loaded prices from local cache.")
+            return PriceDownloadResult(prices=prices, failures=[], from_cache=True, cache_path=cache_path)
 
     try:
         import yfinance as yf
     except ImportError as exc:
         raise RuntimeError("Install yfinance first: pip install yfinance") from exc
 
+    def make_unverified_session():
+        try:
+            from curl_cffi import requests
+
+            session = requests.Session(impersonate="chrome")
+            session.verify = False
+            return session
+        except Exception:
+            return None
+
+    def download_symbols(symbols: list[str], active_threads: int, timeout: int, session=None) -> dict[str, pd.DataFrame]:
+        raw = yf.download(
+            symbols,
+            period=period,
+            interval=interval,
+            auto_adjust=True,
+            group_by="ticker",
+            threads=active_threads,
+            progress=False,
+            actions=False,
+            timeout=timeout,
+            session=session,
+        )
+        return split_yfinance_frame(raw, symbols)
+
     prices: dict[str, pd.DataFrame] = {}
-    failures: list[str] = []
+    warnings: list[str] = []
+    fallback_session = None
+    using_unverified_session = False
     chunks = [unique_tickers[i : i + chunk_size] for i in range(0, len(unique_tickers), chunk_size)]
     total = max(len(chunks), 1)
 
     for idx, chunk in enumerate(chunks, start=1):
         if progress_callback:
             progress_callback(idx - 1, total, f"Downloading chunk {idx}/{total}...")
+        split: dict[str, pd.DataFrame] = {}
         try:
-            raw = yf.download(
-                chunk,
-                period=period,
-                interval=interval,
-                auto_adjust=True,
-                group_by="ticker",
-                threads=threads,
-                progress=False,
-                actions=False,
-                timeout=20,
-            )
-            split = split_yfinance_frame(raw, chunk)
-            prices.update(split)
-            failures.extend([ticker for ticker in chunk if ticker not in split])
+            split = download_symbols(chunk, threads, timeout=25, session=fallback_session if using_unverified_session else None)
         except Exception:
-            failures.extend(chunk)
+            pass
+        if not split and not using_unverified_session:
+            fallback_session = make_unverified_session()
+            if fallback_session is not None:
+                try:
+                    split = download_symbols(chunk, threads, timeout=30, session=fallback_session)
+                    if split:
+                        using_unverified_session = True
+                        warnings.append("Yahoo download required an unverified TLS fallback session in this environment.")
+                except Exception:
+                    pass
+        prices.update(split)
+
+        missing = [ticker for ticker in chunk if ticker not in prices]
+        if missing:
+            retry_chunks = [missing[i : i + 10] for i in range(0, len(missing), 10)]
+            for retry_chunk in retry_chunks:
+                try:
+                    prices.update(
+                        download_symbols(
+                            retry_chunk,
+                            min(4, threads),
+                            timeout=30,
+                            session=fallback_session if using_unverified_session else None,
+                        )
+                    )
+                except Exception:
+                    continue
         if progress_callback:
             progress_callback(idx, total, f"Downloaded {idx}/{total} chunks.")
 
-    long_df = prices_to_long(prices)
-    if not long_df.empty:
+    stale_cache_used = False
+    cached_prices = read_price_cache(cache_path)
+    if prices and cached_prices:
+        missing = [ticker for ticker in unique_tickers if ticker not in prices and ticker in cached_prices]
+        if missing:
+            prices.update({ticker: cached_prices[ticker] for ticker in missing})
+            stale_cache_used = True
+            warnings.append(f"Used stale cache for {len(missing)} symbols that failed to refresh.")
+    elif not prices and cached_prices:
+        prices = cached_prices
+        stale_cache_used = True
+        warnings.append("Download failed; using stale local cache.")
+
+    failures = sorted({ticker for ticker in unique_tickers if ticker not in prices})
+    fresh_prices = {ticker: frame for ticker, frame in prices.items() if not stale_cache_used or ticker not in cached_prices}
+    long_df = prices_to_long(fresh_prices)
+    if not long_df.empty and not stale_cache_used:
         long_df.to_parquet(cache_path, index=False)
-    return PriceDownloadResult(prices=prices, failures=sorted(set(failures)), from_cache=False, cache_path=cache_path)
+    return PriceDownloadResult(
+        prices=prices,
+        failures=failures,
+        from_cache=False,
+        cache_path=cache_path,
+        stale_cache=stale_cache_used,
+        warnings=warnings,
+    )
 
 
 def sma(series: pd.Series, window: int) -> pd.Series:
@@ -543,12 +774,96 @@ def bearish_one_day_reversal(df: pd.DataFrame) -> bool:
     return bool(len(series) and series.iloc[-1])
 
 
+def clamp(value: float, low: float, high: float) -> float:
+    if pd.isna(value):
+        return low
+    return float(min(max(value, low), high))
+
+
+def relative_volume(df: pd.DataFrame, window: int = 50) -> float:
+    if len(df) < 20 or "Volume" not in df:
+        return np.nan
+    volume_avg = df["Volume"].rolling(window, min_periods=min(20, window)).mean().iloc[-1]
+    current_volume = df["Volume"].iloc[-1]
+    if pd.isna(volume_avg) or volume_avg <= 0:
+        return np.nan
+    return float(current_volume / volume_avg)
+
+
+def volume_score_from_rel(rel_volume: float) -> float:
+    if pd.isna(rel_volume):
+        return 0.0
+    if rel_volume >= 1.8:
+        return 10.0
+    if rel_volume >= 1.5:
+        return 8.5
+    if rel_volume >= 1.2:
+        return 7.0
+    if rel_volume >= 1.0:
+        return 5.5
+    if rel_volume >= 0.7:
+        return 3.0
+    return 1.0
+
+
+def pivot_score_from_distance(distance_pct: float | None) -> float:
+    if distance_pct is None or pd.isna(distance_pct):
+        return 0.0
+    if -2.0 <= distance_pct <= 2.0:
+        return 10.0
+    if 2.0 < distance_pct <= 5.0:
+        return 8.0
+    if 5.0 < distance_pct <= 10.0:
+        return 4.5
+    if -5.0 <= distance_pct < -2.0:
+        return 6.0
+    return 0.0
+
+
+def effective_pivot(df: pd.DataFrame, vcp: VCPResult, lookback: int = 20) -> tuple[float | None, float | None]:
+    if vcp.pivot is not None and vcp.pivot_distance_pct is not None:
+        return vcp.pivot, vcp.pivot_distance_pct
+    if len(df) < lookback + 1:
+        return None, None
+    pivot = float(df["High"].iloc[-lookback - 1 : -1].max())
+    current = float(df["Close"].iloc[-1])
+    if pivot <= 0:
+        return None, None
+    return pivot, float((pivot - current) / pivot * 100)
+
+
 def breakout_volume(df: pd.DataFrame, lookback: int = 20) -> bool:
     if len(df) < 55:
         return False
     recent_high = df["High"].iloc[-lookback - 1 : -1].max()
-    volume50 = df["Volume"].rolling(50, min_periods=30).mean().iloc[-1]
-    return bool(df["Close"].iloc[-1] >= recent_high and df["Volume"].iloc[-1] >= volume50 * 1.4)
+    rel_vol = relative_volume(df)
+    return bool(df["Close"].iloc[-1] >= recent_high and pd.notna(rel_vol) and rel_vol >= 1.2)
+
+
+def setup_tier(setup_score: float, breakout: bool, near_pivot: bool, trend_passed: int, rs_rating: float) -> str:
+    if breakout and setup_score >= 55 and rs_rating >= 45 and trend_passed >= 4:
+        return "Breakout"
+    if (near_pivot and setup_score >= 50 and trend_passed >= 4 and rs_rating >= 45) or setup_score >= 62:
+        return "Setup"
+    return "Watch"
+
+
+def risk_flags(
+    reversal: bool,
+    pivot_distance_pct: float | None,
+    rel_vol: float,
+    trend_passed: int,
+) -> str:
+    flags = []
+    if reversal:
+        flags.append("Bearish reversal")
+    if pivot_distance_pct is not None and pd.notna(pivot_distance_pct) and pivot_distance_pct < -6:
+        flags.append("Extended")
+    if pd.notna(rel_vol) and rel_vol < 0.6:
+        flags.append("Low volume")
+    if trend_passed < 4:
+        flags.append("Weak trend")
+    return ", ".join(flags) if flags else "-"
 
 
 def analyze_market(df: pd.DataFrame) -> MarketState:
@@ -597,17 +912,34 @@ def scan_universe(prices: dict[str, pd.DataFrame], benchmark_symbol: str) -> tup
         reversal = bearish_one_day_reversal(df)
         breakout = breakout_volume(df)
 
-        rs_score = rs_rating / 99 * 35
-        volume_score = min((5 if pocket else 0) + (5 if ants else 0) + (5 if breakout else 0), 15)
-        pivot_score = 0.0
-        if vcp.pivot_distance_pct is not None:
-            if -3 <= vcp.pivot_distance_pct <= 2:
-                pivot_score = 10.0
-            elif 2 < vcp.pivot_distance_pct <= 5:
-                pivot_score = 7.0
-            elif 5 < vcp.pivot_distance_pct <= 10:
-                pivot_score = 3.0
-        composite = min(100.0, rs_score + trend.score + vcp.score + volume_score + pivot_score)
+        pivot, pivot_distance_pct = effective_pivot(df, vcp)
+        rel_vol = relative_volume(df)
+        near_pivot = pivot_distance_pct is not None and -3.0 <= pivot_distance_pct <= 5.0
+
+        rs_norm = clamp(rs_rating / 99 * 10, 0, 10)
+        trend_norm = clamp(trend.score / 20 * 10, 0, 10)
+        pivot_norm = pivot_score_from_distance(pivot_distance_pct)
+        rel_volume_norm = volume_score_from_rel(rel_vol)
+        base_norm = clamp(vcp.score / 20 * 10 + (1.0 if pocket else 0.0) + (1.0 if htf else 0.0), 0, 10)
+        setup_score = (
+            rs_norm * 0.25
+            + trend_norm * 0.25
+            + pivot_norm * 0.20
+            + rel_volume_norm * 0.15
+            + base_norm * 0.15
+        ) * 10
+        if reversal:
+            setup_score -= 7.0
+        if pivot_distance_pct is not None and pd.notna(pivot_distance_pct) and pivot_distance_pct < -6.0:
+            setup_score -= 5.0
+        if pd.notna(rel_vol) and rel_vol < 0.5:
+            setup_score -= 3.0
+        if trend.passed < 4:
+            setup_score -= 4.0
+        setup_score = clamp(setup_score, 0, 100)
+        tier = setup_tier(setup_score, breakout, near_pivot, trend.passed, rs_rating)
+        tier_rank = {"Watch": 1, "Setup": 2, "Breakout": 3}[tier]
+
         patterns = []
         if vcp.is_vcp:
             patterns.append("VCP")
@@ -631,14 +963,21 @@ def scan_universe(prices: dict[str, pd.DataFrame], benchmark_symbol: str) -> tup
                 "Trend": round(trend.score, 1),
                 "Trend Pass": f"{trend.passed}/{trend.total}",
                 "VCP": round(vcp.score, 1),
-                "Pivot": vcp.pivot,
-                "Pivot Dist %": None if vcp.pivot_distance_pct is None else round(vcp.pivot_distance_pct, 2),
-                "Volume Score": volume_score,
-                "Composite": round(composite, 1),
+                "Pivot": pivot,
+                "Pivot Dist %": None if pivot_distance_pct is None else round(pivot_distance_pct, 2),
+                "Rel Volume": None if pd.isna(rel_vol) else round(rel_vol, 2),
+                "Volume Score": round(rel_volume_norm, 1),
+                "Setup Score": round(setup_score, 1),
+                "Composite": round(setup_score, 1),
+                "Tier": tier,
+                "Tier Rank": tier_rank,
+                "Breakout": breakout,
+                "Near Pivot": near_pivot,
                 "Pocket Pivot": pocket,
                 "Ants": ants,
                 "HTF": htf,
                 "Bearish Reversal": reversal,
+                "Risk Flag": risk_flags(reversal, pivot_distance_pct, rel_vol, trend.passed),
                 "Patterns": ", ".join(patterns) if patterns else "-",
             }
         )
@@ -646,7 +985,7 @@ def scan_universe(prices: dict[str, pd.DataFrame], benchmark_symbol: str) -> tup
     leaderboard = pd.DataFrame(rows)
     if leaderboard.empty:
         return leaderboard, market_state
-    return leaderboard.sort_values(["Composite", "RS"], ascending=False).reset_index(drop=True), market_state
+    return leaderboard.sort_values(["Tier Rank", "Setup Score", "RS"], ascending=False).reset_index(drop=True), market_state
 
 
 def make_price_chart(ticker: str, df: pd.DataFrame, lookback: int = 180) -> go.Figure:
@@ -769,6 +1108,52 @@ def cached_scan(long_prices: pd.DataFrame, benchmark_symbol: str):
     }
 
 
+def tier_passes(tier: str, tier_filter: str) -> bool:
+    rank = {"Watch": 1, "Setup": 2, "Breakout": 3}.get(tier, 0)
+    if tier_filter == "Breakout only":
+        return rank >= 3
+    if tier_filter == "Setup+":
+        return rank >= 2
+    if tier_filter == "Watch+":
+        return rank >= 1
+    return True
+
+
+def filter_miss_reason(row: pd.Series, rs_cutoff: int, tier_filter: str, required_patterns: list[str]) -> str:
+    misses = []
+    if int(row["RS"]) < rs_cutoff:
+        misses.append(f"RS<{rs_cutoff}")
+    if not tier_passes(str(row["Tier"]), tier_filter):
+        misses.append(f"Tier<{tier_filter}")
+    patterns = str(row["Patterns"])
+    for pattern in required_patterns:
+        if pattern not in patterns:
+            misses.append(f"No {pattern}")
+    return ", ".join(misses) if misses else "-"
+
+
+def prepare_display_frames(
+    leaderboard: pd.DataFrame,
+    meta: pd.DataFrame,
+    rs_cutoff: int,
+    tier_filter: str,
+    required_patterns: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if leaderboard.empty or "Ticker" not in leaderboard.columns:
+        return leaderboard.copy(), leaderboard.copy()
+    display_base = leaderboard.merge(meta, on="Ticker", how="left")
+    display_base["Name"] = display_base["Name"].fillna("")
+    display_base["Sector"] = display_base["Sector"].fillna("")
+    display_base["Filter Miss"] = display_base.apply(
+        lambda row: filter_miss_reason(row, rs_cutoff, tier_filter, required_patterns),
+        axis=1,
+    )
+    passing = display_base[display_base["Filter Miss"] == "-"].copy()
+    preliminary = display_base[display_base["Filter Miss"] != "-"].copy()
+    preliminary = preliminary.sort_values(["Setup Score", "RS"], ascending=False).head(30)
+    return passing.reset_index(drop=True), preliminary.reset_index(drop=True)
+
+
 def render_market_badge(status: str, color: str, message: str) -> None:
     palette = {
         "green": ("#e6f4ea", "#137333"),
@@ -804,7 +1189,8 @@ def main() -> None:
 
     default_limit = min(int(config["default_limit"]), len(universe_df))
     max_symbols = st.sidebar.number_input("Max symbols to scan", min_value=5, max_value=max(len(universe_df), 5), value=default_limit, step=10)
-    rs_cutoff = st.sidebar.slider("Minimum RS", min_value=1, max_value=99, value=70)
+    rs_cutoff = st.sidebar.slider("Minimum RS", min_value=1, max_value=99, value=50)
+    tier_filter = st.sidebar.selectbox("Tier filter", ["All", "Watch+", "Setup+", "Breakout only"], index=2)
     required_patterns = st.sidebar.multiselect(
         "Required pattern",
         ["VCP", "Pocket Pivot", "Ants", "HTF", "Breakout Vol", "Bearish Reversal"],
@@ -832,6 +1218,8 @@ def main() -> None:
             progress_callback=update_progress,
         )
         source = "cache" if result.from_cache else "yfinance"
+        if result.stale_cache:
+            source = f"{source} + stale cache"
         status.update(label=f"Loaded {len(result.prices)} symbols from {source}", state="complete")
     progress_bar.empty()
 
@@ -847,76 +1235,116 @@ def main() -> None:
     render_market_badge(market_state.status, market_state.color, market_state.message)
     st.sidebar.metric("Distribution Days", market_state.distribution_days)
     st.sidebar.metric("Follow-through Day", "Yes" if market_state.follow_through_day else "No")
+    st.sidebar.metric("Loaded Symbols", len(result.prices))
+    st.sidebar.metric("Failed Symbols", len(result.failures))
 
     if leaderboard.empty:
         st.warning("Not enough price history to scan this universe.")
         return
 
     meta = selected_universe.rename(columns={"symbol": "Ticker", "name": "Name", "sector": "Sector"})
-    display_df = leaderboard.merge(meta, on="Ticker", how="left")
-    display_df["Name"] = display_df["Name"].fillna("")
-    display_df["Sector"] = display_df["Sector"].fillna("")
-    display_df = display_df[display_df["RS"] >= rs_cutoff]
-    for pattern in required_patterns:
-        display_df = display_df[display_df["Patterns"].str.contains(pattern, regex=False)]
+    display_df, preliminary_df = prepare_display_frames(leaderboard, meta, int(rs_cutoff), tier_filter, required_patterns)
 
     st.subheader("Leaderboard")
+    st.caption(f"Active filters: RS >= {rs_cutoff} | Tier: {tier_filter} | Required patterns: {', '.join(required_patterns) if required_patterns else 'None'}")
     if result.failures:
         st.warning(f"{len(result.failures)} symbols failed or returned empty data. First failures: {', '.join(result.failures[:15])}")
+    for warning in result.warnings:
+        st.warning(warning)
     st.caption(f"Local cache: `{result.cache_path}`")
-
-    if display_df.empty:
-        st.info("No symbols match the current filters.")
-        return
 
     columns = [
         "Ticker",
         "Name",
         "Sector",
-        "Composite",
+        "Tier",
+        "Setup Score",
         "RS",
-        "Trend",
         "Trend Pass",
-        "VCP",
+        "Breakout",
+        "Near Pivot",
         "Pivot Dist %",
-        "Volume Score",
+        "Rel Volume",
+        "Risk Flag",
         "Patterns",
         "Last Close",
         "Volume",
     ]
-    event = st.dataframe(
-        display_df[columns],
-        use_container_width=True,
-        hide_index=True,
-        height=430,
-        on_select="rerun",
-        selection_mode="single-row",
-        column_config={
-            "Composite": st.column_config.ProgressColumn("Composite", min_value=0, max_value=100, format="%.1f"),
-            "RS": st.column_config.ProgressColumn("RS", min_value=1, max_value=99, format="%d"),
-            "Last Close": st.column_config.NumberColumn("Last Close", format="%.2f"),
-            "Volume": st.column_config.NumberColumn("Volume", format="%d"),
-            "Pivot Dist %": st.column_config.NumberColumn("Pivot Dist %", format="%.2f"),
-        },
-    )
 
-    selected_rows = event.selection.rows
+    column_config = {
+        "Setup Score": st.column_config.ProgressColumn("Setup Score", min_value=0, max_value=100, format="%.1f"),
+        "RS": st.column_config.ProgressColumn("RS", min_value=1, max_value=99, format="%d"),
+        "Breakout": st.column_config.CheckboxColumn("Breakout"),
+        "Near Pivot": st.column_config.CheckboxColumn("Near Pivot"),
+        "Last Close": st.column_config.NumberColumn("Last Close", format="%.2f"),
+        "Volume": st.column_config.NumberColumn("Volume", format="%d"),
+        "Pivot Dist %": st.column_config.NumberColumn("Pivot Dist %", format="%.2f"),
+        "Rel Volume": st.column_config.NumberColumn("Rel Volume", format="%.2f"),
+    }
+
+    event = None
+    if display_df.empty:
+        st.info("No symbols match the current filters. Use the Preliminary Watchlist below for the closest setups.")
+    else:
+        event = st.dataframe(
+            display_df[columns],
+            use_container_width=True,
+            hide_index=True,
+            height=430,
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config=column_config,
+            key="leaderboard_table",
+        )
+
+    preliminary_event = None
+    if not preliminary_df.empty:
+        st.subheader("Preliminary Watchlist")
+        st.info(
+            f"현재 필터(RS>={rs_cutoff}, Tier={tier_filter})를 통과한 종목이 부족하거나 제외된 종목 중에서, "
+            "기준에 가장 근접한 상위 후보를 표시합니다."
+        )
+        preliminary_columns = [*columns[:11], "Filter Miss", *columns[11:]]
+        preliminary_event = st.dataframe(
+            preliminary_df[preliminary_columns],
+            use_container_width=True,
+            hide_index=True,
+            height=320,
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config={**column_config, "Filter Miss": st.column_config.TextColumn("Filter Miss")},
+            key="preliminary_table",
+        )
+
+    selected_source = display_df if not display_df.empty else preliminary_df
+    selected_rows = []
+    if event is not None and event.selection.rows:
+        selected_source = display_df
+        selected_rows = event.selection.rows
+    elif preliminary_event is not None and preliminary_event.selection.rows:
+        selected_source = preliminary_df
+        selected_rows = preliminary_event.selection.rows
+
+    if selected_source.empty:
+        st.warning("No symbols are available for chart review.")
+        return
+
     row_idx = selected_rows[0] if selected_rows else 0
-    selected = display_df.iloc[row_idx]
+    selected = selected_source.iloc[row_idx]
     ticker = selected["Ticker"]
-    prices = long_to_prices(long_prices)
-    selected_df = prices.get(ticker)
+    selected_df = result.prices.get(ticker)
     if selected_df is None or selected_df.empty:
         st.warning(f"No chart data for {ticker}.")
         return
 
     st.subheader(f"{ticker} Detail")
     metric_cols = st.columns(5)
-    metric_cols[0].metric("Composite", f"{selected['Composite']:.1f}")
-    metric_cols[1].metric("RS", f"{int(selected['RS'])}")
-    metric_cols[2].metric("Trend", selected["Trend Pass"])
+    metric_cols[0].metric("Setup Score", f"{selected['Setup Score']:.1f}")
+    metric_cols[1].metric("Tier", selected["Tier"])
+    metric_cols[2].metric("RS", f"{int(selected['RS'])}")
     metric_cols[3].metric("Pivot Dist", "-" if pd.isna(selected["Pivot Dist %"]) else f"{selected['Pivot Dist %']:.2f}%")
-    metric_cols[4].metric("Patterns", selected["Patterns"])
+    metric_cols[4].metric("Rel Volume", "-" if pd.isna(selected["Rel Volume"]) else f"{selected['Rel Volume']:.2f}x")
+    st.caption(f"Patterns: {selected['Patterns']} | Risk: {selected['Risk Flag']}")
     st.plotly_chart(make_price_chart(ticker, selected_df), use_container_width=True)
 
 
