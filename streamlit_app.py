@@ -286,6 +286,21 @@ class VCPResult:
     pivot: float | None
     pivot_distance_pct: float | None
     volume_dry_up: bool
+    label: str = "No VCP"
+    max_depth: float | None = None
+
+
+@dataclass
+class BreakoutStatus:
+    state: str
+    is_breakout: bool
+    is_active: bool
+    is_extended: bool
+    is_risk: bool
+    breakout_age: int | None
+    extension_pct: float | None
+    close_position: float | None
+    risk_flags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -687,7 +702,10 @@ def detect_vcp(df: pd.DataFrame, lookback: int = 80) -> VCPResult:
 
     pairs = pairs[-4:]
     depths = [depth for _, _, depth in pairs if depth > 0.02]
-    contracting = len(depths) >= 2 and all(left > right for left, right in zip(depths, depths[1:]))
+    contracting = len(depths) >= 2 and depths[0] > depths[-1]
+    strictly_contracting = len(depths) >= 2 and all(left > right for left, right in zip(depths, depths[1:]))
+    max_depth = max(depths) if depths else None
+    last_depth = depths[-1] if depths else None
     volume50 = recent["Volume"].rolling(50, min_periods=20).mean().iloc[-1]
     last5_volume = recent["Volume"].tail(5).mean()
     volume_dry_up = bool(pd.notna(volume50) and volume50 > 0 and last5_volume < volume50 * 0.65)
@@ -702,20 +720,50 @@ def detect_vcp(df: pd.DataFrame, lookback: int = 80) -> VCPResult:
             pivot_distance_pct = float((pivot - current) / pivot * 100)
 
     pivot_near = pivot_distance_pct is not None and -3.0 <= pivot_distance_pct <= 5.0
+    balanced_vcp = bool(
+        len(depths) >= 2
+        and contracting
+        and last_depth is not None
+        and last_depth <= 0.12
+        and max_depth is not None
+        and max_depth <= 0.35
+        and (volume_dry_up or pivot_near)
+    )
+    candidate_vcp = bool(
+        not balanced_vcp
+        and len(depths) >= 2
+        and contracting
+        and max_depth is not None
+        and max_depth <= 0.45
+        and (pivot_near or volume_dry_up or (last_depth is not None and last_depth <= 0.18))
+    )
+    label = "VCP" if balanced_vcp else "VCP Candidate" if candidate_vcp else "No VCP"
     score = 0.0
     if contracting:
         score += 8.0
+    if strictly_contracting:
+        score += 2.0
+    if last_depth is not None and last_depth <= 0.12:
+        score += 3.0
+    if max_depth is not None and max_depth <= 0.35:
+        score += 3.0
     if volume_dry_up:
         score += 6.0
     if pivot_near:
         score += 6.0
+    if label == "No VCP":
+        score = min(score, 8.0)
+    elif label == "VCP Candidate":
+        score = min(score, 14.0)
     return VCPResult(
         score=min(score, 20.0),
-        is_vcp=bool(contracting and (volume_dry_up or pivot_near)),
+        is_vcp=balanced_vcp,
         contraction_depths=depths,
         pivot=pivot,
         pivot_distance_pct=pivot_distance_pct,
         volume_dry_up=volume_dry_up,
+        label=label,
+        max_depth=max_depth,
     )
 
 
@@ -880,20 +928,101 @@ def effective_pivot(df: pd.DataFrame, vcp: VCPResult, lookback: int = 20) -> tup
     return pivot, float((pivot - current) / pivot * 100)
 
 
-def breakout_volume(df: pd.DataFrame, lookback: int = 20) -> bool:
-    if len(df) < 55:
-        return False
-    recent_high = df["High"].iloc[-lookback - 1 : -1].max()
-    rel_vol = relative_volume(df)
-    return bool(df["Close"].iloc[-1] >= recent_high and pd.notna(rel_vol) and rel_vol >= 1.2)
+def candle_close_position(df: pd.DataFrame) -> float | None:
+    if df.empty:
+        return None
+    high = float(df["High"].iloc[-1])
+    low = float(df["Low"].iloc[-1])
+    close = float(df["Close"].iloc[-1])
+    spread = high - low
+    if spread <= 0:
+        return None
+    return float((close - low) / spread)
 
 
-def setup_tier(setup_score: float, breakout: bool, near_pivot: bool, trend_passed: int, rs_rating: float) -> str:
-    if breakout and setup_score >= 55 and rs_rating >= 45 and trend_passed >= 4:
-        return "Breakout"
-    if (near_pivot and setup_score >= 50 and trend_passed >= 4 and rs_rating >= 45) or setup_score >= 62:
+def breakout_age(df: pd.DataFrame, pivot: float | None, lookback: int = 40) -> int | None:
+    if pivot is None or pd.isna(pivot) or pivot <= 0 or len(df) < 2:
+        return None
+    close = df["Close"].tail(lookback + 1)
+    crosses = (close > pivot) & (close.shift(1) <= pivot)
+    if not crosses.any():
+        return None
+    last_cross_date = crosses[crosses].index[-1]
+    return int(len(close.loc[last_cross_date:]) - 1)
+
+
+def breakout_status(
+    df: pd.DataFrame,
+    pivot: float | None,
+    rel_vol: float,
+    reversal: bool,
+    trend_passed: int,
+) -> BreakoutStatus:
+    if pivot is None or pd.isna(pivot) or pivot <= 0 or len(df) < 55:
+        return BreakoutStatus("Watch", False, False, False, False, None, None, None, [])
+
+    close = df["Close"]
+    current = float(close.iloc[-1])
+    previous = float(close.iloc[-2])
+    extension_pct = float((current - pivot) / pivot * 100)
+    close_position = candle_close_position(df)
+    age = breakout_age(df, pivot)
+    sma10_last = close.tail(10).mean()
+    sma20_last = close.tail(20).mean()
+    sma50_last = close.tail(50).mean()
+    above_pivot = current > pivot
+    crossed_today = above_pivot and previous <= pivot
+    rel_vol_ok = pd.notna(rel_vol) and rel_vol >= 1.2
+    close_position_ok = close_position is not None and close_position >= 0.50
+    breakout = bool(crossed_today and rel_vol_ok and close_position_ok)
+
+    ma10_ext = (current / sma10_last - 1) * 100 if pd.notna(sma10_last) and sma10_last > 0 else 0.0
+    ma20_ext = (current / sma20_last - 1) * 100 if pd.notna(sma20_last) and sma20_last > 0 else 0.0
+    holds_short_ma = bool(pd.notna(sma10_last) and pd.notna(sma20_last) and current > sma10_last and current > sma20_last)
+    extended = bool(above_pivot and (extension_pct > 8.0 or ma10_ext > 8.0 or ma20_ext > 12.0))
+    active = bool(above_pivot and not breakout and not extended and extension_pct <= 8.0 and holds_short_ma)
+
+    flags: list[str] = []
+    if reversal:
+        flags.append("Bearish reversal")
+    if previous > pivot and current < pivot:
+        flags.append("Lost pivot")
+    if crossed_today and (not rel_vol_ok or not close_position_ok):
+        flags.append("Weak breakout")
+    if pd.notna(sma50_last) and current < sma50_last:
+        flags.append("Below 50SMA")
+    if trend_passed < 4:
+        flags.append("Weak trend")
+    risk = bool(flags and ("Bearish reversal" in flags or "Lost pivot" in flags or "Below 50SMA" in flags))
+
+    if risk:
+        state = "Risk"
+    elif extended:
+        state = "Extended"
+    elif breakout:
+        state = "Breakout"
+    elif active:
+        state = "Active"
+    else:
+        state = "Watch"
+    return BreakoutStatus(state, breakout, active, extended, risk, age, extension_pct, close_position, flags)
+
+
+def classify_state(
+    setup_score: float,
+    near_pivot: bool,
+    trend_passed: int,
+    rs_rating: float,
+    status: BreakoutStatus,
+) -> str:
+    if status.state in {"Risk", "Extended", "Breakout", "Active"}:
+        return status.state
+    if near_pivot and setup_score >= 50 and trend_passed >= 4 and rs_rating >= 45:
         return "Setup"
     return "Watch"
+
+
+STATE_RANK = {"Risk": 1, "Extended": 2, "Watch": 3, "Active": 4, "Setup": 5, "Breakout": 6}
 
 
 def risk_flags(
@@ -901,8 +1030,9 @@ def risk_flags(
     pivot_distance_pct: float | None,
     rel_vol: float,
     trend_passed: int,
+    status: BreakoutStatus | None = None,
 ) -> str:
-    flags = []
+    flags = list(status.risk_flags) if status is not None else []
     if reversal:
         flags.append("Bearish reversal")
     if pivot_distance_pct is not None and pd.notna(pivot_distance_pct) and pivot_distance_pct < -6:
@@ -911,6 +1041,7 @@ def risk_flags(
         flags.append("Low volume")
     if trend_passed < 4:
         flags.append("Weak trend")
+    flags = list(dict.fromkeys(flags))
     return ", ".join(flags) if flags else "-"
 
 
@@ -958,11 +1089,11 @@ def scan_universe(prices: dict[str, pd.DataFrame], benchmark_symbol: str) -> tup
         ants = ants_indicator(df)
         htf = htf_lite(df)
         reversal = bearish_one_day_reversal(df)
-        breakout = breakout_volume(df)
 
         pivot, pivot_distance_pct = effective_pivot(df, vcp)
         rel_vol = relative_volume(df)
-        near_pivot = pivot_distance_pct is not None and -3.0 <= pivot_distance_pct <= 5.0
+        near_pivot = pivot_distance_pct is not None and 0.0 <= pivot_distance_pct <= 5.0
+        status = breakout_status(df, pivot, rel_vol, reversal, trend.passed)
 
         rs_norm = clamp(rs_rating / 99 * 10, 0, 10)
         trend_norm = clamp(trend.score / 20 * 10, 0, 10)
@@ -985,20 +1116,22 @@ def scan_universe(prices: dict[str, pd.DataFrame], benchmark_symbol: str) -> tup
         if trend.passed < 4:
             setup_score -= 4.0
         setup_score = clamp(setup_score, 0, 100)
-        tier = setup_tier(setup_score, breakout, near_pivot, trend.passed, rs_rating)
-        tier_rank = {"Watch": 1, "Setup": 2, "Breakout": 3}[tier]
+        state = classify_state(setup_score, near_pivot, trend.passed, rs_rating, status)
+        state_rank = STATE_RANK[state]
 
         patterns = []
-        if vcp.is_vcp:
+        if vcp.label == "VCP":
             patterns.append("VCP")
+        elif vcp.label == "VCP Candidate":
+            patterns.append("VCP Candidate")
         if pocket:
             patterns.append("Pocket Pivot")
         if ants:
             patterns.append("Ants")
         if htf:
             patterns.append("HTF")
-        if breakout:
-            patterns.append("Breakout Vol")
+        if status.is_breakout:
+            patterns.append("Breakout")
         if reversal:
             patterns.append("Bearish Reversal")
 
@@ -1017,15 +1150,23 @@ def scan_universe(prices: dict[str, pd.DataFrame], benchmark_symbol: str) -> tup
                 "Volume Score": round(rel_volume_norm, 1),
                 "Setup Score": round(setup_score, 1),
                 "Composite": round(setup_score, 1),
-                "Tier": tier,
-                "Tier Rank": tier_rank,
-                "Breakout": breakout,
+                "State": state,
+                "State Rank": state_rank,
+                "Tier": state,
+                "Tier Rank": state_rank,
+                "Breakout": status.is_breakout,
+                "Active": status.is_active,
+                "Extended": status.is_extended,
                 "Near Pivot": near_pivot,
+                "Breakout Age": status.breakout_age,
+                "Extension %": None if status.extension_pct is None else round(status.extension_pct, 2),
+                "Close Position": None if status.close_position is None else round(status.close_position, 2),
+                "VCP Label": vcp.label,
                 "Pocket Pivot": pocket,
                 "Ants": ants,
                 "HTF": htf,
                 "Bearish Reversal": reversal,
-                "Risk Flag": risk_flags(reversal, pivot_distance_pct, rel_vol, trend.passed),
+                "Risk Flag": risk_flags(reversal, pivot_distance_pct, rel_vol, trend.passed, status),
                 "Patterns": ", ".join(patterns) if patterns else "-",
             }
         )
@@ -1033,7 +1174,7 @@ def scan_universe(prices: dict[str, pd.DataFrame], benchmark_symbol: str) -> tup
     leaderboard = pd.DataFrame(rows)
     if leaderboard.empty:
         return leaderboard, market_state
-    return leaderboard.sort_values(["Tier Rank", "Setup Score", "RS"], ascending=False).reset_index(drop=True), market_state
+    return leaderboard.sort_values(["State Rank", "Setup Score", "RS"], ascending=False).reset_index(drop=True), market_state
 
 
 def make_price_chart(ticker: str, df: pd.DataFrame, lookback: int = 180) -> go.Figure:
@@ -1095,12 +1236,13 @@ def make_price_chart(ticker: str, df: pd.DataFrame, lookback: int = 180) -> go.F
         )
 
     vcp = detect_vcp(df)
-    if vcp.pivot is not None:
-        fig.add_hline(y=vcp.pivot, line_width=1.3, line_dash="dash", line_color="#673ab7", row=1, col=1)
+    chart_pivot, _ = effective_pivot(df, vcp)
+    if chart_pivot is not None:
+        fig.add_hline(y=chart_pivot, line_width=1.3, line_dash="dash", line_color="#673ab7", row=1, col=1)
         fig.add_annotation(
             x=chart_df.index[-1],
-            y=vcp.pivot,
-            text=f"Pivot {vcp.pivot:.2f}",
+            y=chart_pivot,
+            text=f"{vcp.label} Pivot {chart_pivot:.2f}",
             showarrow=False,
             xanchor="right",
             yanchor="bottom",
@@ -1123,6 +1265,36 @@ def make_price_chart(ticker: str, df: pd.DataFrame, lookback: int = 180) -> go.F
             row=1,
             col=1,
         )
+
+    rel_vol = relative_volume(df)
+    reversal = bearish_one_day_reversal(df)
+    trend = trend_template(df, rs_rating=99)
+    status = breakout_status(df, chart_pivot, rel_vol, reversal, trend.passed)
+    state_colors = {
+        "Setup": "#1a73e8",
+        "Breakout": "#673ab7",
+        "Active": "#0f9d58",
+        "Extended": "#f9ab00",
+        "Risk": "#b3261e",
+        "Watch": "#5f6368",
+    }
+    state_color = state_colors.get(status.state, "#5f6368")
+    if status.breakout_age is not None and 0 <= status.breakout_age < len(chart_df):
+        breakout_date = chart_df.index[-status.breakout_age - 1]
+        fig.add_vline(x=breakout_date, line_width=1.2, line_dash="dot", line_color="#673ab7", row=1, col=1)
+    fig.add_trace(
+        go.Scatter(
+            x=[chart_df.index[-1]],
+            y=[chart_df["Close"].iloc[-1]],
+            mode="markers+text",
+            name=f"State: {status.state}",
+            marker=dict(color=state_color, size=12, symbol="diamond"),
+            text=[status.state],
+            textposition="top center",
+        ),
+        row=1,
+        col=1,
+    )
 
     fig.update_layout(
         title=f"{ticker} Daily Chart",
@@ -1156,26 +1328,20 @@ def cached_scan(long_prices: pd.DataFrame, benchmark_symbol: str):
     }
 
 
-def tier_passes(tier: str, tier_filter: str) -> bool:
-    rank = {"Watch": 1, "Setup": 2, "Breakout": 3}.get(tier, 0)
-    if tier_filter == "Breakout only":
-        return rank >= 3
-    if tier_filter == "Setup+":
-        return rank >= 2
-    if tier_filter == "Watch+":
-        return rank >= 1
-    return True
+def pattern_tokens(patterns: str) -> list[str]:
+    return [token.strip() for token in str(patterns).split(",") if token.strip() and token.strip() != "-"]
 
 
-def filter_miss_reason(row: pd.Series, rs_cutoff: int, tier_filter: str, required_patterns: list[str]) -> str:
+def filter_miss_reason(row: pd.Series, rs_cutoff: int, state_filter: list[str], required_patterns: list[str]) -> str:
     misses = []
     if int(row["RS"]) < rs_cutoff:
         misses.append(f"RS<{rs_cutoff}")
-    if not tier_passes(str(row["Tier"]), tier_filter):
-        misses.append(f"Tier<{tier_filter}")
-    patterns = str(row["Patterns"])
+    state = str(row["State"])
+    if state_filter and state not in state_filter:
+        misses.append(f"State not selected")
+    tokens = pattern_tokens(str(row["Patterns"]))
     for pattern in required_patterns:
-        if pattern not in patterns:
+        if pattern not in tokens:
             misses.append(f"No {pattern}")
     return ", ".join(misses) if misses else "-"
 
@@ -1184,7 +1350,7 @@ def prepare_display_frames(
     leaderboard: pd.DataFrame,
     meta: pd.DataFrame,
     rs_cutoff: int,
-    tier_filter: str,
+    state_filter: list[str],
     required_patterns: list[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     if leaderboard.empty or "Ticker" not in leaderboard.columns:
@@ -1193,7 +1359,7 @@ def prepare_display_frames(
     display_base["Name"] = display_base["Name"].fillna("")
     display_base["Sector"] = display_base["Sector"].fillna("")
     display_base["Filter Miss"] = display_base.apply(
-        lambda row: filter_miss_reason(row, rs_cutoff, tier_filter, required_patterns),
+        lambda row: filter_miss_reason(row, rs_cutoff, state_filter, required_patterns),
         axis=1,
     )
     passing = display_base[display_base["Filter Miss"] == "-"].copy()
@@ -1248,10 +1414,11 @@ def main() -> None:
         key=scan_limit_key,
     )
     rs_cutoff = st.sidebar.slider("Minimum RS", min_value=1, max_value=99, value=40)
-    tier_filter = st.sidebar.selectbox("Tier filter", ["All", "Watch+", "Setup+", "Breakout only"], index=1)
+    state_options = ["Setup", "Breakout", "Active", "Watch", "Extended", "Risk"]
+    state_filter = st.sidebar.multiselect("State filter", state_options, default=["Setup", "Breakout", "Active"])
     required_patterns = st.sidebar.multiselect(
         "Required pattern",
-        ["VCP", "Pocket Pivot", "Ants", "HTF", "Breakout Vol", "Bearish Reversal"],
+        ["VCP", "VCP Candidate", "Pocket Pivot", "Ants", "HTF", "Breakout", "Bearish Reversal"],
         default=[],
     )
     force_refresh = st.sidebar.button("Refresh market data", use_container_width=True)
@@ -1304,10 +1471,11 @@ def main() -> None:
         return
 
     meta = selected_universe.rename(columns={"symbol": "Ticker", "name": "Name", "sector": "Sector"})
-    display_df, preliminary_df = prepare_display_frames(leaderboard, meta, int(rs_cutoff), tier_filter, required_patterns)
+    display_df, preliminary_df = prepare_display_frames(leaderboard, meta, int(rs_cutoff), state_filter, required_patterns)
 
     st.subheader("Leaderboard")
-    st.caption(f"Active filters: RS >= {rs_cutoff} | Tier: {tier_filter} | Required patterns: {', '.join(required_patterns) if required_patterns else 'None'}")
+    state_filter_label = ", ".join(state_filter) if state_filter else "All"
+    st.caption(f"Active filters: RS >= {rs_cutoff} | States: {state_filter_label} | Required patterns: {', '.join(required_patterns) if required_patterns else 'None'}")
     if result.failures:
         st.warning(f"{len(result.failures)} symbols failed or returned empty data. First failures: {', '.join(result.failures[:15])}")
     if result.invalid_tickers:
@@ -1320,13 +1488,15 @@ def main() -> None:
         "Ticker",
         "Name",
         "Sector",
-        "Tier",
+        "State",
         "Setup Score",
         "RS",
         "Trend Pass",
-        "Breakout",
-        "Near Pivot",
+        "VCP Label",
+        "Pivot",
         "Pivot Dist %",
+        "Extension %",
+        "Breakout Age",
         "Rel Volume",
         "Risk Flag",
         "Patterns",
@@ -1337,11 +1507,12 @@ def main() -> None:
     column_config = {
         "Setup Score": st.column_config.ProgressColumn("Setup Score", min_value=0, max_value=100, format="%.1f"),
         "RS": st.column_config.ProgressColumn("RS", min_value=1, max_value=99, format="%d"),
-        "Breakout": st.column_config.CheckboxColumn("Breakout"),
-        "Near Pivot": st.column_config.CheckboxColumn("Near Pivot"),
+        "Pivot": st.column_config.NumberColumn("Pivot", format="%.2f"),
         "Last Close": st.column_config.NumberColumn("Last Close", format="%.2f"),
         "Volume": st.column_config.NumberColumn("Volume", format="%d"),
         "Pivot Dist %": st.column_config.NumberColumn("Pivot Dist %", format="%.2f"),
+        "Extension %": st.column_config.NumberColumn("Extension %", format="%.2f"),
+        "Breakout Age": st.column_config.NumberColumn("Breakout Age", format="%d"),
         "Rel Volume": st.column_config.NumberColumn("Rel Volume", format="%.2f"),
     }
 
@@ -1363,7 +1534,7 @@ def main() -> None:
     preliminary_event = None
     if not preliminary_df.empty:
         st.subheader("Preliminary Watchlist")
-        st.info(f"Closest candidates that did not pass the active filters (RS >= {rs_cutoff}, Tier = {tier_filter}).")
+        st.info(f"Closest candidates that did not pass the active filters (RS >= {rs_cutoff}, States = {state_filter_label}).")
         preliminary_columns = [*columns[:11], "Filter Miss", *columns[11:]]
         preliminary_event = st.dataframe(
             preliminary_df[preliminary_columns],
@@ -1400,11 +1571,11 @@ def main() -> None:
     st.subheader(f"{ticker} Detail")
     metric_cols = st.columns(5)
     metric_cols[0].metric("Setup Score", f"{selected['Setup Score']:.1f}")
-    metric_cols[1].metric("Tier", selected["Tier"])
+    metric_cols[1].metric("State", selected["State"])
     metric_cols[2].metric("RS", f"{int(selected['RS'])}")
-    metric_cols[3].metric("Pivot Dist", "-" if pd.isna(selected["Pivot Dist %"]) else f"{selected['Pivot Dist %']:.2f}%")
+    metric_cols[3].metric("Extension", "-" if pd.isna(selected["Extension %"]) else f"{selected['Extension %']:.2f}%")
     metric_cols[4].metric("Rel Volume", "-" if pd.isna(selected["Rel Volume"]) else f"{selected['Rel Volume']:.2f}x")
-    st.caption(f"Patterns: {selected['Patterns']} | Risk: {selected['Risk Flag']}")
+    st.caption(f"VCP: {selected['VCP Label']} | Patterns: {selected['Patterns']} | Risk: {selected['Risk Flag']}")
     st.plotly_chart(make_price_chart(ticker, selected_df), use_container_width=True)
 
 
