@@ -24,6 +24,7 @@ PRICE_CACHE_DIR = CACHE_DIR / "prices"
 SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 QUICK_SCAN_LIMIT = 60
 DOWNLOAD_TIME_BUDGET_SECONDS = 90
+RS_MIN_BARS = 120
 DISCLAIMER = (
     "Research dashboard only. This is not investment advice, an order execution "
     "system, or a real-time trading feed."
@@ -75,6 +76,7 @@ KOSPI_SEED = [
     ("078930", "GS", "Energy & Chemicals"),
     ("006360", "GS E&C", "Constructions"),
     ("007070", "GS Retail", "Consumer Staples"),
+    ("012630", "HDC", "Constructions"),
     ("086790", "Hana Financial", "Financials"),
     ("009420", "Hanall Biopharma", "Health Care"),
     ("300720", "Hanil Cement", "Constructions"),
@@ -607,12 +609,22 @@ def atr(df: pd.DataFrame, window: int = 14) -> pd.Series:
 
 def weighted_quarter_return(close: pd.Series) -> float:
     clean = close.dropna()
-    if len(clean) < 253:
+    if len(clean) < RS_MIN_BARS:
         return np.nan
-    q1 = clean.iloc[-1] / clean.iloc[-64] - 1
-    q2 = clean.iloc[-64] / clean.iloc[-127] - 1
-    q3 = clean.iloc[-127] / clean.iloc[-190] - 1
-    q4 = clean.iloc[-190] / clean.iloc[-253] - 1
+    quarter = min(63, (len(clean) - 1) // 4)
+    if quarter < 20 or len(clean) < quarter * 4 + 1:
+        return np.nan
+    latest = clean.iloc[-1]
+    q1_base = clean.iloc[-1 - quarter]
+    q2_base = clean.iloc[-1 - quarter * 2]
+    q3_base = clean.iloc[-1 - quarter * 3]
+    q4_base = clean.iloc[-1 - quarter * 4]
+    if min(latest, q1_base, q2_base, q3_base, q4_base) <= 0:
+        return np.nan
+    q1 = latest / q1_base - 1
+    q2 = q1_base / q2_base - 1
+    q3 = q2_base / q3_base - 1
+    q4 = q3_base / q4_base - 1
     return float(q1 * 0.4 + q2 * 0.2 + q3 * 0.2 + q4 * 0.2)
 
 
@@ -620,29 +632,38 @@ def calculate_rs_ratings(prices: dict[str, pd.DataFrame]) -> pd.DataFrame:
     rows = []
     for ticker, df in prices.items():
         if "Close" in df:
-            rows.append({"Ticker": ticker, "weighted_return": weighted_quarter_return(df["Close"])})
+            clean_len = int(df["Close"].dropna().shape[0])
+            rows.append(
+                {
+                    "Ticker": ticker,
+                    "weighted_return": weighted_quarter_return(df["Close"]),
+                    "rs_bars": clean_len,
+                    "rs_valid": clean_len >= RS_MIN_BARS,
+                }
+            )
     out = pd.DataFrame(rows)
     if out.empty:
-        return pd.DataFrame(columns=["Ticker", "weighted_return", "rs_rating"])
+        return pd.DataFrame(columns=["Ticker", "weighted_return", "rs_rating", "rs_bars", "rs_valid"])
     valid = out["weighted_return"].notna()
     out["rs_rating"] = 1
     if valid.any():
-        ranks = out.loc[valid, "weighted_return"].rank(pct=True, method="min")
+        ranks = out.loc[valid, "weighted_return"].rank(pct=True, method="average")
         out.loc[valid, "rs_rating"] = np.clip(np.ceil(ranks * 99), 1, 99).astype(int)
+    out["rs_valid"] = valid
     return out
 
 
 def trend_template(df: pd.DataFrame, rs_rating: float | int | None) -> TrendTemplateResult:
     close = df["Close"].dropna()
-    if len(close) < 252:
+    if len(close) < 220:
         return TrendTemplateResult(score=0.0, passed=0, total=8, conditions={})
 
     sma50 = sma(close, 50)
     sma150 = sma(close, 150)
     sma200 = sma(close, 200)
     current = close.iloc[-1]
-    high_52w = close.tail(252).max()
-    low_52w = close.tail(252).min()
+    high_52w = close.tail(min(252, len(close))).max()
+    low_52w = close.tail(min(252, len(close))).min()
     rs = 0 if rs_rating is None or pd.isna(rs_rating) else float(rs_rating)
     conditions = {
         "price_above_150_200": bool(current > sma150.iloc[-1] and current > sma200.iloc[-1]),
@@ -1078,11 +1099,17 @@ def scan_universe(prices: dict[str, pd.DataFrame], benchmark_symbol: str) -> tup
     scan_prices = {ticker: df for ticker, df in prices.items() if ticker != benchmark_symbol and len(df) >= 60}
     rs = calculate_rs_ratings(scan_prices)
     rs_map = dict(zip(rs["Ticker"], rs["rs_rating"], strict=False))
+    rs_return_map = dict(zip(rs["Ticker"], rs.get("weighted_return", pd.Series(dtype=float)), strict=False))
+    rs_bars_map = dict(zip(rs["Ticker"], rs.get("rs_bars", pd.Series(dtype=int)), strict=False))
+    rs_valid_map = dict(zip(rs["Ticker"], rs.get("rs_valid", pd.Series(dtype=bool)), strict=False))
 
     rows = []
     for ticker, df in scan_prices.items():
         latest = df.iloc[-1]
         rs_rating = float(rs_map.get(ticker, 1))
+        weighted_return = rs_return_map.get(ticker, np.nan)
+        rs_bars = int(rs_bars_map.get(ticker, len(df)))
+        rs_valid = bool(rs_valid_map.get(ticker, False))
         trend = trend_template(df, rs_rating)
         vcp = detect_vcp(df)
         pocket = is_pocket_pivot_last(df)
@@ -1141,6 +1168,9 @@ def scan_universe(prices: dict[str, pd.DataFrame], benchmark_symbol: str) -> tup
                 "Last Close": float(latest["Close"]),
                 "Volume": int(latest["Volume"]) if pd.notna(latest["Volume"]) else 0,
                 "RS": int(rs_rating),
+                "weighted_return": None if pd.isna(weighted_return) else round(float(weighted_return), 4),
+                "RS Bars": rs_bars,
+                "RS Valid": rs_valid,
                 "Trend": round(trend.score, 1),
                 "Trend Pass": f"{trend.passed}/{trend.total}",
                 "VCP": round(vcp.score, 1),
@@ -1403,7 +1433,7 @@ def main() -> None:
 
     scan_mode = st.sidebar.selectbox("Scan mode", ["Quick scan", "Full universe"], index=0)
     mode_limit = len(universe_df) if scan_mode == "Full universe" else min(QUICK_SCAN_LIMIT, len(universe_df))
-    default_limit = min(int(config["default_limit"]), mode_limit)
+    default_limit = mode_limit if scan_mode == "Full universe" else min(int(config["default_limit"]), mode_limit)
     scan_limit_key = f"max_symbols_{scan_mode.lower().replace(' ', '_')}"
     max_symbols = st.sidebar.number_input(
         "Max symbols to scan",
@@ -1421,12 +1451,13 @@ def main() -> None:
         ["VCP", "VCP Candidate", "Pocket Pivot", "Ants", "HTF", "Breakout", "Bearish Reversal"],
         default=[],
     )
-    force_refresh = st.sidebar.button("Refresh market data", use_container_width=True)
+    force_refresh = st.sidebar.button("Refresh market data", width="stretch")
 
     selected_universe = universe_df.head(int(max_symbols)).copy()
     tickers = selected_universe["symbol"].tolist()
     tickers_with_benchmark = list(dict.fromkeys([*tickers, benchmark]))
     st.sidebar.caption(f"Universe symbols: {len(tickers)} | Benchmark: {benchmark}")
+    st.sidebar.caption("RS is ranked within the loaded scan universe. Use Full universe for broader percentile context.")
 
     progress_bar = st.progress(0, text="Preparing data load...")
 
@@ -1470,12 +1501,39 @@ def main() -> None:
         st.warning("Not enough price history to scan this universe.")
         return
 
+    rs_valid_count = int(leaderboard["RS Valid"].sum()) if "RS Valid" in leaderboard else 0
+    rs_total_count = int(len(leaderboard))
+    rs_min_bars = int(leaderboard["RS Bars"].min()) if "RS Bars" in leaderboard and not leaderboard.empty else 0
+    rs_median = float(leaderboard["RS"].median()) if "RS" in leaderboard and not leaderboard.empty else np.nan
+    st.sidebar.metric("RS Valid", f"{rs_valid_count}/{rs_total_count}")
+    st.sidebar.metric("RS Universe", rs_total_count)
+    if rs_valid_count < rs_total_count:
+        st.warning(
+            f"RS coverage warning: {rs_valid_count}/{rs_total_count} symbols have enough bars "
+            f"(minimum required: {RS_MIN_BARS}, current minimum loaded: {rs_min_bars})."
+        )
+
     meta = selected_universe.rename(columns={"symbol": "Ticker", "name": "Name", "sector": "Sector"})
     display_df, preliminary_df = prepare_display_frames(leaderboard, meta, int(rs_cutoff), state_filter, required_patterns)
 
     st.subheader("Leaderboard")
     state_filter_label = ", ".join(state_filter) if state_filter else "All"
-    st.caption(f"Active filters: RS >= {rs_cutoff} | States: {state_filter_label} | Required patterns: {', '.join(required_patterns) if required_patterns else 'None'}")
+    st.caption(
+        f"Active filters: RS >= {rs_cutoff} | States: {state_filter_label} | "
+        f"Required patterns: {', '.join(required_patterns) if required_patterns else 'None'} | "
+        f"RS scope: {rs_total_count} loaded symbols"
+    )
+    with st.expander("State guide", expanded=False):
+        st.markdown(
+            """
+            - **Setup**: Below or near pivot by 0-5%, trend/RS filters are acceptable, and not already extended.
+            - **Breakout**: Crossed above pivot today from below, with relative volume >= 1.2x and a close in the upper half of the daily range.
+            - **Active**: Already above pivot after a valid breakout, within +8% of pivot, and holding above short moving averages.
+            - **Extended**: More than +8% above pivot or materially stretched from short moving averages.
+            - **Risk**: Bearish reversal, lost pivot, weak breakout failure, below 50SMA, or weak trend warning.
+            - **Watch**: Useful candidate context, but not actionable under the current setup/breakout rules.
+            """
+        )
     if result.failures:
         st.warning(f"{len(result.failures)} symbols failed or returned empty data. First failures: {', '.join(result.failures[:15])}")
     if result.invalid_tickers:
@@ -1483,6 +1541,30 @@ def main() -> None:
     for warning in result.warnings:
         st.warning(warning)
     st.caption(f"Local cache: `{result.cache_path}`")
+    with st.expander("QA diagnostics", expanded=False):
+        st.write(
+            {
+                "market": market,
+                "period": period,
+                "scan_mode": scan_mode,
+                "loaded_symbols": len(result.prices),
+                "failed_symbols": len(result.failures),
+                "excluded_symbols": len(result.invalid_tickers),
+                "rs_valid": f"{rs_valid_count}/{rs_total_count}",
+                "rs_scope": f"{rs_total_count} loaded scan symbols",
+                "rs_min_bars": rs_min_bars,
+                "rs_median": None if pd.isna(rs_median) else round(rs_median, 2),
+                "kospi_seed_symbols": int(len(universe_df)) if market == "KOSPI 200" else None,
+            }
+        )
+        if "RS" in leaderboard and not leaderboard.empty:
+            st.dataframe(
+                leaderboard[["Ticker", "RS", "RS Bars", "RS Valid", "weighted_return"]].head(30)
+                if "weighted_return" in leaderboard.columns
+                else leaderboard[["Ticker", "RS", "RS Bars", "RS Valid"]].head(30),
+                width="stretch",
+                hide_index=True,
+            )
 
     columns = [
         "Ticker",
@@ -1491,6 +1573,7 @@ def main() -> None:
         "State",
         "Setup Score",
         "RS",
+        "RS Bars",
         "Trend Pass",
         "VCP Label",
         "Pivot",
@@ -1507,6 +1590,7 @@ def main() -> None:
     column_config = {
         "Setup Score": st.column_config.ProgressColumn("Setup Score", min_value=0, max_value=100, format="%.1f"),
         "RS": st.column_config.ProgressColumn("RS", min_value=1, max_value=99, format="%d"),
+        "RS Bars": st.column_config.NumberColumn("RS Bars", format="%d"),
         "Pivot": st.column_config.NumberColumn("Pivot", format="%.2f"),
         "Last Close": st.column_config.NumberColumn("Last Close", format="%.2f"),
         "Volume": st.column_config.NumberColumn("Volume", format="%d"),
@@ -1522,7 +1606,7 @@ def main() -> None:
     else:
         event = st.dataframe(
             display_df[columns],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=430,
             on_select="rerun",
@@ -1538,7 +1622,7 @@ def main() -> None:
         preliminary_columns = [*columns[:11], "Filter Miss", *columns[11:]]
         preliminary_event = st.dataframe(
             preliminary_df[preliminary_columns],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=320,
             on_select="rerun",
@@ -1576,7 +1660,7 @@ def main() -> None:
     metric_cols[3].metric("Extension", "-" if pd.isna(selected["Extension %"]) else f"{selected['Extension %']:.2f}%")
     metric_cols[4].metric("Rel Volume", "-" if pd.isna(selected["Rel Volume"]) else f"{selected['Rel Volume']:.2f}x")
     st.caption(f"VCP: {selected['VCP Label']} | Patterns: {selected['Patterns']} | Risk: {selected['Risk Flag']}")
-    st.plotly_chart(make_price_chart(ticker, selected_df), use_container_width=True)
+    st.plotly_chart(make_price_chart(ticker, selected_df), width="stretch")
 
 
 if __name__ == "__main__":
